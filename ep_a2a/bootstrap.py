@@ -27,12 +27,43 @@ class DistEnv:
     local_rank: int
 
 
+def _maybe_patch_deepep_buffer():
+    """Experiment knobs for DeepEP internode bring-up on GB200.
+
+    The stock DeepEP Buffer uses legacy CUDA IPC (cudaIpcOpenMemHandle), which
+    is node-local and fails cross-node with 'invalid resource handle'. On GB200
+    with the IMEX fabric up, the cross-node path needs use_fabric=True
+    (CU_MEM_HANDLE_TYPE_FABRIC). sglang sets neither, so we override here:
+      EP_A2A_USE_FABRIC=1     -> use_fabric=True   (fabric shareable handles)
+      EP_A2A_DISABLE_MNNVL=1  -> allow_mnnvl=False (force IB-RDMA internode)
+    """
+    use_fabric = os.environ.get("EP_A2A_USE_FABRIC") == "1"
+    disable_mnnvl = os.environ.get("EP_A2A_DISABLE_MNNVL") == "1"
+    if not (use_fabric or disable_mnnvl):
+        return
+    try:
+        import deep_ep
+    except ImportError:
+        return
+    _orig = deep_ep.Buffer.__init__
+
+    def _patched(self, *args, **kwargs):
+        if use_fabric:
+            kwargs["use_fabric"] = True
+        if disable_mnnvl:
+            kwargs["allow_mnnvl"] = False
+        return _orig(self, *args, **kwargs)
+
+    deep_ep.Buffer.__init__ = _patched
+
+
 def init_dist_env(cfg: BenchConfig) -> DistEnv:
     """Read torchrun/srun env, init NCCL + SGLang model parallel (TP==EP).
 
     moe_a2a_backend is passed so init_distributed_environment creates the
     extra coordination state some backends need (e.g. NIXL's global TCPStore).
     """
+    _maybe_patch_deepep_buffer()
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     local_rank = int(os.environ.get("LOCAL_RANK", rank % torch.cuda.device_count()))
