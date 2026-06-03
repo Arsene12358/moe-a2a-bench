@@ -31,20 +31,27 @@ def _expert_output_from_dispatch(dispatch_out):
         hs = hs[0]
     if hs.dtype == torch.bfloat16:
         return hs
-    # Quantized dispatch: emulate the bf16 expert output shape.
-    return torch.zeros(hs.shape, dtype=torch.bfloat16, device=hs.device)
+    # Quantized dispatch (native mode): DeepEP combine only accepts bf16, so
+    # cast the dispatched tokens back to bf16 (mimics the bf16 GEMM output).
+    return hs.to(torch.bfloat16)
 
 
 def run_once(dispatcher, hidden_states, topk_output):
-    """One dispatch+combine cycle. Returns the combined output tensor."""
-    dispatch_out = dispatcher.dispatch(hidden_states, topk_output)
+    """One dispatch+combine cycle. Returns the combined output tensor.
+
+    MaybeTboDeepEPDispatcher.dispatch/combine delegate to the inner dispatcher
+    via **kwargs, so they must be called with keyword arguments.
+    """
+    dispatch_out = dispatcher.dispatch(
+        hidden_states=hidden_states, topk_output=topk_output
+    )
     expert_out = _expert_output_from_dispatch(dispatch_out)
     combine_input = (
         expert_out,
         dispatch_out.topk_ids,
         dispatch_out.topk_weights,
     )
-    return dispatcher.combine(combine_input)
+    return dispatcher.combine(combine_input=combine_input)
 
 
 def correctness_gate(dispatcher, hidden_states, topk_output, atol=2e-2):
