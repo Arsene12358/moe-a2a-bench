@@ -21,13 +21,9 @@ from ep_a2a.workload import make_workload
 
 def main():
     cfg = parse_args()
-    env = init_dist_env()
+    env = init_dist_env(cfg)
 
-    try:
-        dispatcher, num_local_experts = build_dispatcher(cfg, env)
-    except ImportError as e:
-        # Backend library (deep_ep / mooncake / nixl) not installed: mark N/A
-        # rather than aborting the whole sweep.
+    def _write_na(reason: str):
         if env.rank == 0:
             with open(cfg.out, "w") as f:
                 json.dump(
@@ -36,23 +32,34 @@ def main():
                         "regime": cfg.regime,
                         "dtype_mode": cfg.dtype_mode,
                         "status": "unavailable",
-                        "reason": str(e),
+                        "reason": reason,
                     },
                     f,
                     indent=2,
                 )
-            print(f"skipped: {cfg.backend} not available: {e}", flush=True)
+            print(
+                f"skipped: {cfg.backend}/{cfg.regime}/{cfg.dtype_mode} "
+                f"unavailable: {reason}",
+                flush=True,
+            )
+
+    # A backend may be uninstalled (ImportError), built against the wrong torch
+    # (ImportError), or not support this regime (NotImplementedError, e.g. NIXL
+    # /Mooncake have no normal mode). Mark N/A and keep the sweep alive.
+    try:
+        dispatcher, num_local_experts = build_dispatcher(cfg, env)
+        hidden_states, topk_output = make_workload(cfg, rank=env.rank, device="cuda")
+        if cfg.dtype_mode == "bf16":
+            correctness_gate(dispatcher, hidden_states, topk_output)
+            if env.rank == 0:
+                print("correctness gate: OK", flush=True)
+        else:
+            run_once(dispatcher, hidden_states, topk_output)  # probe
+    except (ImportError, NotImplementedError) as e:
+        _write_na(f"{type(e).__name__}: {str(e)[:160]}")
         dist.barrier()
         dist.destroy_process_group()
         return
-
-    hidden_states, topk_output = make_workload(cfg, rank=env.rank, device="cuda")
-
-    # Correctness gate (only meaningful in bf16; skip strict gate for native).
-    if cfg.dtype_mode == "bf16":
-        correctness_gate(dispatcher, hidden_states, topk_output)
-        if env.rank == 0:
-            print("correctness gate: OK", flush=True)
 
     dist.barrier()
     times = time_fn(

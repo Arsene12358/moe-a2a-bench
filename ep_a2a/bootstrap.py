@@ -27,8 +27,12 @@ class DistEnv:
     local_rank: int
 
 
-def init_dist_env() -> DistEnv:
-    """Read torchrun/srun env, init NCCL + SGLang model parallel (TP==EP)."""
+def init_dist_env(cfg: BenchConfig) -> DistEnv:
+    """Read torchrun/srun env, init NCCL + SGLang model parallel (TP==EP).
+
+    moe_a2a_backend is passed so init_distributed_environment creates the
+    extra coordination state some backends need (e.g. NIXL's global TCPStore).
+    """
     rank = int(os.environ["RANK"])
     world_size = int(os.environ["WORLD_SIZE"])
     local_rank = int(os.environ.get("LOCAL_RANK", rank % torch.cuda.device_count()))
@@ -44,6 +48,7 @@ def init_dist_env() -> DistEnv:
         local_rank=local_rank,
         distributed_init_method=init_method,
         backend="nccl",
+        moe_a2a_backend=cfg.backend,
     )
     # ep_size == tp_size == world_size for all DeepEP-family backends.
     initialize_model_parallel(tensor_model_parallel_size=world_size)
