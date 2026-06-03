@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Benchmark outputs
+ep_a2a_results/
+result_*.json
+*.json.tmp
+traces/
+*.trace.json

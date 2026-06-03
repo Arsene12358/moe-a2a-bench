@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "moe-a2a-bench"
+version = "0.1.0"
+description = "Cross-backend all2all (MoE dispatch/combine) performance suite for SGLang large-scale expert parallelism"
+requires-python = ">=3.9"
+# Runtime deps (sglang, torch, deep_ep/mooncake/nixl) are provided by the
+# GPU environment / container, not pinned here.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest", "numpy"]
+
+[tool.setuptools]
+packages = ["ep_a2a"]
+
+[tool.black]
+line-length = 88
+
+[tool.isort]
+profile = "black"
