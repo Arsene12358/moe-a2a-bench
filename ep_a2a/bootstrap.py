@@ -103,14 +103,24 @@ def build_dispatcher(cfg: BenchConfig, env: DistEnv):
     """
     # With JIT DeepGEMM the dispatcher defaults to fp8 output; force bf16 for
     # bf16 mode so dispatch emits bf16 (combine requires bf16). native -> auto.
+    # Field names vary across sglang versions (e.g. v0.5.11 has no
+    # deepep_dispatcher_output_dtype); construct with what this version
+    # supports and report anything dropped.
+    import dataclasses
+
     dispatch_dtype = "bf16" if cfg.dtype_mode == "bf16" else "auto"
-    server_args = ServerArgs(
-        model_path="dummy",  # never loaded; ServerArgs requires the field
-        moe_a2a_backend=cfg.backend,
-        deepep_mode=_deepep_mode_for(cfg.regime),
-        deepep_dispatcher_output_dtype=dispatch_dtype,
-        moe_runner_backend="auto",
-    )
+    wanted = {
+        "model_path": "dummy",  # never loaded; ServerArgs requires the field
+        "moe_a2a_backend": cfg.backend,
+        "deepep_mode": _deepep_mode_for(cfg.regime),
+        "deepep_dispatcher_output_dtype": dispatch_dtype,
+        "moe_runner_backend": "auto",
+    }
+    supported = {f.name for f in dataclasses.fields(ServerArgs)}
+    dropped = sorted(k for k in wanted if k not in supported)
+    if dropped and env.rank == 0:
+        print(f"[bootstrap] ServerArgs fields unsupported here, dropped: {dropped}")
+    server_args = ServerArgs(**{k: v for k, v in wanted.items() if k in supported})
     # The DeepEP-family dispatchers read the process-global ServerArgs (e.g.
     # get_deepep_output_dtype -> get_global_server_args), so it must be set in
     # addition to the MoE config globals.
