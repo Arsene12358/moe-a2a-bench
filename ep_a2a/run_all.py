@@ -19,6 +19,17 @@ def main():
         "--dtype-modes", nargs="+", default=DTYPE_MODES, dest="dtype_modes"
     )
     p.add_argument(
+        "--routings", nargs="+", default=["balanced"],
+        help="routing modes to sweep (balanced/hotspot/zipf/trace)",
+    )
+    p.add_argument("--skew", type=float, default=1.0, help="zipf exponent")
+    p.add_argument(
+        "--hot-placement", default="scattered", dest="hot_placement",
+        choices=["contiguous", "scattered"],
+    )
+    p.add_argument("--trace-path", default=None, dest="trace_path")
+    p.add_argument("--split-phases", action="store_true", dest="split_phases")
+    p.add_argument(
         "--gpus-per-node",
         type=int,
         default=int(os.environ.get("GPUS_PER_NODE", 8)),
@@ -38,28 +49,39 @@ def main():
     for backend in args.backends:
         for regime in args.regimes:
             for dtype_mode in args.dtype_modes:
-                tag = f"{backend}_{regime}_{dtype_mode}"
-                out = os.path.join(args.outdir, f"result_{tag}.json")
-                cmd = [
-                    "torchrun",
-                    f"--nnodes={args.nnodes}",
-                    f"--node_rank={args.node_rank}",
-                    f"--nproc_per_node={args.gpus_per_node}",
-                    f"--master_addr={args.master_addr}",
-                    f"--master_port={args.master_port}",
-                    "-m",
-                    "ep_a2a.bench",
-                    "--backend",
-                    backend,
-                    "--regime",
-                    regime,
-                    "--dtype-mode",
-                    dtype_mode,
-                    "--out",
-                    out,
-                ]
-                print(f"[run_all] launching {tag}", flush=True)
-                subprocess.run(cmd, check=False)
+                for routing in args.routings:
+                    tag = f"{backend}_{regime}_{dtype_mode}_{routing}"
+                    out = os.path.join(args.outdir, f"result_{tag}.json")
+                    cmd = [
+                        "torchrun",
+                        f"--nnodes={args.nnodes}",
+                        f"--node_rank={args.node_rank}",
+                        f"--nproc_per_node={args.gpus_per_node}",
+                        f"--master_addr={args.master_addr}",
+                        f"--master_port={args.master_port}",
+                        "-m",
+                        "ep_a2a.bench",
+                        "--backend",
+                        backend,
+                        "--regime",
+                        regime,
+                        "--dtype-mode",
+                        dtype_mode,
+                        "--routing",
+                        routing,
+                        "--skew",
+                        str(args.skew),
+                        "--hot-placement",
+                        args.hot_placement,
+                        "--out",
+                        out,
+                    ]
+                    if args.trace_path:
+                        cmd += ["--trace-path", args.trace_path]
+                    if args.split_phases:
+                        cmd += ["--split-phases"]
+                    print(f"[run_all] launching {tag}", flush=True)
+                    subprocess.run(cmd, check=False)
 
     if args.node_rank == 0:
         results = load_results(os.path.join(args.outdir, "result_*.json"))

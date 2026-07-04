@@ -6,19 +6,25 @@ import glob
 import json
 from typing import List
 
-_COLUMNS = ["backend", "regime", "dtype_mode", "roundtrip_p50_us", "achieved_gbps"]
+_COLUMNS = [
+    "backend",
+    "regime",
+    "dtype_mode",
+    "routing",
+    "roundtrip_p50_us",
+    "rank_spread",
+    "rx_skew_max_mean",
+    "achieved_gbps",
+]
+_NUMERIC = ("roundtrip_p50_us", "rank_spread", "rx_skew_max_mean", "achieved_gbps")
 
 
 def _cell(r: dict, key: str) -> str:
     if r.get("status") == "unavailable":
-        return (
-            "N/A"
-            if key in ("roundtrip_p50_us", "achieved_gbps")
-            else str(r.get(key, ""))
-        )
+        return "N/A" if key in _NUMERIC else str(r.get(key, ""))
     val = r.get(key, "")
     if isinstance(val, float):
-        return f"{val:.1f}"
+        return f"{val:.2f}" if key in ("rank_spread", "rx_skew_max_mean") else f"{val:.1f}"
     return str(val)
 
 

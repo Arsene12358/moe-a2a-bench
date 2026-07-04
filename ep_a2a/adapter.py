@@ -54,6 +54,34 @@ def run_once(dispatcher, hidden_states, topk_output):
     return dispatcher.combine(combine_input=combine_input)
 
 
+def make_phase_fns(dispatcher, hidden_states, topk_output):
+    """Split the cycle for --split-phases timing: (dispatch, combine).
+
+    The dispatch phase INCLUDES output materialization
+    (_expert_output_from_dispatch): in low-latency modes the dispatched
+    tensors' first use is where the stream waits on the transport, so leaving
+    it untimed would hide most of the dispatch cost in the gap between phases
+    (observed 8.5x on GB300). dispatch+combine therefore sums to ~the unsplit
+    roundtrip minus only python glue.
+    """
+    state = {}
+
+    def dispatch_phase():
+        out = dispatcher.dispatch(
+            hidden_states=hidden_states, topk_output=topk_output
+        )
+        state["combine_input"] = (
+            _expert_output_from_dispatch(out),
+            out.topk_ids,
+            out.topk_weights,
+        )
+
+    def combine_phase():
+        dispatcher.combine(combine_input=state["combine_input"])
+
+    return dispatch_phase, combine_phase
+
+
 def correctness_gate(dispatcher, hidden_states, topk_output, atol=2e-2):
     """In bf16 balanced mode, combine(dispatch(x)) reconstructs the
     topk-weighted sum of x. We check the output is finite, the right shape,

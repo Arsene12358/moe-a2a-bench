@@ -16,8 +16,10 @@ the runtime environment / container.
 Milestone 1: **DeepEP, Mooncake, NIXL**. FlashInfer = Milestone 2; raw-DeepEP
 cross-check = Milestone 3.
 
-**Code is UNVERIFIED pending the first GPU smoke** — authored on a host without a
-GPU. Pure-Python helpers (config / metrics / report) are unit-tested.
+**DeepEP path verified on GB300** (1 node x 4 GPUs, sglang v0.5.11 container):
+decode + prefill regimes, all routing modes, and --split-phases (dispatch +
+combine sum within 1% of the unsplit roundtrip). Mooncake / NIXL cells and
+multi-node remain unverified. Pure-Python helpers are unit-tested.
 
 ## Install
 
@@ -57,14 +59,54 @@ GPUS_PER_NODE=8 python -m ep_a2a.run_all
 pytest tests/ -v
 ```
 
+## Expert load balance
+
+a2a cost is a function of expert load skew, so routing is a first-class axis
+(`--routing`, sweepable via `run_all --routings ...`):
+
+- `balanced` — uniform k-subsets (default).
+- `hotspot` — legacy worst case: the first `num_experts//8` experts win every
+  token (`imbalanced` is an accepted alias). A corner, not a dial.
+- `zipf` — calibrated skew: expert popularity ∝ 1/(rank+1)^`--skew`, sampled
+  per token without replacement (Gumbel-top-k). `--hot-placement scattered`
+  (default) places experts load-aware greedily across ranks (best-case static
+  placement, an EPLB-like envelope); `contiguous` piles the popular experts
+  onto the first ranks (worst case). Real unoptimized placements fall between.
+- `trace` — replay real routing from `--trace-path file.npz` containing
+  `topk_ids [N, topk] int64` (+ optional `topk_weights float32`), e.g.
+  converted from sglang's `expert_distribution_recorder`. Rank r takes rows
+  `[r*num_tokens, ...)` with wraparound. This is the ground-truth mode: it
+  reproduces production skew exactly.
+
+Every result records the *achieved* load, not just the intended one:
+`rx_pairs_per_rank` (routed (token, expert) pairs received per rank — what
+sizes both the receive traffic and the expert GEMM), `rx_unique_tokens_per_rank`
+(for backends that dedup per destination), and `rx_skew_max_mean`.
+
+Timing is reported as the per-iteration **critical path**: the max across
+ranks is taken within each iteration, then percentiles over iterations
+(`critical_path_p10/50/90_us`; `roundtrip_p50_us` equals the p50 for table
+compatibility). Per-rank medians (`per_rank_p50_us`), their `rank_spread`
+(max/min), and `straggler_stability` (fraction of iterations whose slowest
+rank is the modal slowest — ~1.0 means a statically hot rank, ~1/world_size
+means rotating jitter) attribute the cost. `hot_rank_rx_gbps` is the hottest
+rank's receive bandwidth — the lane that saturates first under skew.
+
+`--split-phases` times dispatch and combine separately. The dispatch phase
+includes output materialization — in low-latency modes that first use is where
+the stream waits on the transport, so excluding it would hide most of the
+dispatch cost. Note the send/recv halves *within* a phase are fused in the
+kernels and are not separable from the host; attribute them by correlating
+`{dispatch,combine}_per_rank_p50_us` against `rx_pairs_per_rank` instead.
+
 ## Notes
 
 - `num_experts` must be divisible by world size (ep_size).
 - A backend whose library is not installed is reported as `N/A`.
 - `--dtype-mode native` requires fp8 dispatch to be active (JIT DeepGEMM); if it
   cannot be forced, that cell should be skipped rather than reported as bf16.
-- Timing is the dispatch+combine round trip (per-phase split is a planned
-  follow-up).
+- The workload (including routing) is generated once and replayed for all
+  iterations; there is no step-to-step routing variance like real serving.
 
 ## Layout
 
