@@ -29,6 +29,7 @@ def main():
     )
     p.add_argument("--trace-path", default=None, dest="trace_path")
     p.add_argument("--split-phases", action="store_true", dest="split_phases")
+    p.add_argument("--cuda-graph", action="store_true", dest="cuda_graph")
     p.add_argument(
         "--gpus-per-node",
         type=int,
@@ -80,6 +81,8 @@ def main():
                         cmd += ["--trace-path", args.trace_path]
                     if args.split_phases:
                         cmd += ["--split-phases"]
+                    if args.cuda_graph and regime == "decode":
+                        cmd += ["--cuda-graph"]
                     print(f"[run_all] launching {tag}", flush=True)
                     subprocess.run(cmd, check=False)
 

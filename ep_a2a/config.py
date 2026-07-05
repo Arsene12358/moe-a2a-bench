@@ -29,6 +29,7 @@ class BenchConfig:
     hot_placement: str = "scattered"  # where zipf's popular experts live
     trace_path: Optional[str] = None  # required for routing == "trace"
     split_phases: bool = False  # time dispatch and combine separately
+    cuda_graph: bool = False  # time graph replays (device path only)
     warmups: int = 20
     iters: int = 30
     seed: int = 0
@@ -44,6 +45,11 @@ class BenchConfig:
         assert self.hot_placement in HOT_PLACEMENTS, self.hot_placement
         if self.routing == "trace" and not self.trace_path:
             raise ValueError("routing='trace' requires trace_path")
+        if self.cuda_graph and self.regime != "decode":
+            raise ValueError(
+                "cuda_graph timing requires the low-latency (decode) path; "
+                "normal mode (prefill) host-syncs and cannot be captured"
+            )
         if self.num_tokens is None:
             self.num_tokens = _DEFAULT_NUM_TOKENS[self.regime]
 
@@ -71,6 +77,11 @@ def parse_args(argv: Optional[List[str]] = None) -> BenchConfig:
     p.add_argument(
         "--split-phases", action="store_true", dest="split_phases",
         help="time dispatch and combine separately (extra sync point between)",
+    )
+    p.add_argument(
+        "--cuda-graph", action="store_true", dest="cuda_graph",
+        help="capture phases into CUDA graphs and time replays: device-path "
+        "transport only, no host overhead (decode regime only)",
     )
     p.add_argument("--warmups", type=int, default=20)
     p.add_argument("--iters", type=int, default=30)

@@ -23,7 +23,12 @@ from ep_a2a.metrics import (
     skew_max_mean,
     straggler_stability,
 )
-from ep_a2a.timing import time_fn, time_phases
+from ep_a2a.timing import (
+    time_fn,
+    time_fn_cuda_graph,
+    time_phases,
+    time_phases_cuda_graph,
+)
 from ep_a2a.workload import make_workload
 
 
@@ -73,9 +78,11 @@ def main():
         return
 
     dist.barrier()
+    _time_one = time_fn_cuda_graph if cfg.cuda_graph else time_fn
+    _time_split = time_phases_cuda_graph if cfg.cuda_graph else time_phases
     if cfg.split_phases:
         d_fn, c_fn = make_phase_fns(dispatcher, hidden_states, topk_output)
-        phase_times = time_phases(
+        phase_times = _time_split(
             [("dispatch", d_fn), ("combine", c_fn)],
             warmups=cfg.warmups,
             iters=cfg.iters,
@@ -85,7 +92,7 @@ def main():
         ]
     else:
         phase_times = None
-        times = time_fn(
+        times = _time_one(
             lambda: run_once(dispatcher, hidden_states, topk_output),
             warmups=cfg.warmups,
             iters=cfg.iters,
@@ -124,6 +131,7 @@ def main():
         "backend": cfg.backend,
         "regime": cfg.regime,
         "dtype_mode": cfg.dtype_mode,
+        "timing": "cuda_graph" if cfg.cuda_graph else "eager",
         "routing": cfg.routing,
         "skew": cfg.skew if cfg.routing == "zipf" else None,
         "hot_placement": cfg.hot_placement if cfg.routing == "zipf" else None,

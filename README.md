@@ -92,12 +92,29 @@ rank is the modal slowest — ~1.0 means a statically hot rank, ~1/world_size
 means rotating jitter) attribute the cost. `hot_rank_rx_gbps` is the hottest
 rank's receive bandwidth — the lane that saturates first under skew.
 
-`--split-phases` times dispatch and combine separately. The dispatch phase
-includes output materialization — in low-latency modes that first use is where
-the stream waits on the transport, so excluding it would hide most of the
-dispatch cost. Note the send/recv halves *within* a phase are fused in the
-kernels and are not separable from the host; attribute them by correlating
-`{dispatch,combine}_per_rank_p50_us` against `rx_pairs_per_rank` instead.
+`--split-phases` times the pure dispatch and combine kernels (whose fused
+receive-waits are genuine transport). The identity materialization — the
+stand-in for the expert GEMM's output write, a cast over the whole padded
+dispatch buffer — runs once at setup and is excluded: it is compute-side
+work that dwarfs the a2a kernels (~2.4 ms vs ~0.1 ms at 512 tokens on GB300)
+and production pays it inside the masked GEMM, not the transport. The
+*unsplit* roundtrip still includes it every iteration (it times the full
+dispatcher->identity-expert->combine cycle). Use `--split-phases
+--cuda-graph` for transport-only numbers. Note the send/recv halves *within*
+a phase are fused in the kernels and are not separable from the host;
+attribute them by correlating `{dispatch,combine}_per_rank_p50_us` against
+`rx_pairs_per_rank` instead.
+
+Two timing modes (the `timing` field records which one produced a result):
+
+- **eager** (default): times the production eager code path — kernels plus
+  the wrapper's host work (python, launches, count read-backs). On the LL
+  path the host side dominates (~20x the kernels), which is real cost for
+  non-graphed serving but not transport.
+- **`--cuda-graph`** (decode regime only): captures each timed region into a
+  CUDA graph and times replays — the device path only, comparable to
+  graph-mode serving and to kernel sums in nsys traces. Prefill's normal
+  mode host-syncs internally and cannot be captured.
 
 ## Notes
 

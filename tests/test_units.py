@@ -99,6 +99,17 @@ def test_make_workload_shapes(routing):
 # ---------------------------------------------------------------------------
 
 
+def test_config_cuda_graph_decode_only():
+    cfg = BenchConfig(
+        backend="deepep", regime="decode", dtype_mode="bf16", cuda_graph=True
+    )
+    assert cfg.cuda_graph
+    with pytest.raises(ValueError, match="cuda_graph"):
+        BenchConfig(
+            backend="deepep", regime="prefill", dtype_mode="bf16", cuda_graph=True
+        )
+
+
 def test_config_imbalanced_alias_and_trace_validation():
     cfg = BenchConfig(
         backend="deepep", regime="decode", dtype_mode="bf16", routing="imbalanced"

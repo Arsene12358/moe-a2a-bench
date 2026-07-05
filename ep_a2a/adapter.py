@@ -57,27 +57,30 @@ def run_once(dispatcher, hidden_states, topk_output):
 def make_phase_fns(dispatcher, hidden_states, topk_output):
     """Split the cycle for --split-phases timing: (dispatch, combine).
 
-    The dispatch phase INCLUDES output materialization
-    (_expert_output_from_dispatch): in low-latency modes the dispatched
-    tensors' first use is where the stream waits on the transport, so leaving
-    it untimed would hide most of the dispatch cost in the gap between phases
-    (observed 8.5x on GB300). dispatch+combine therefore sums to ~the unsplit
-    roundtrip minus only python glue.
+    combine_input is materialized ONCE from a probe dispatch and reused every
+    timed iteration. The materialization (identity cast of the padded
+    dispatch buffer, ~E x max_tokens x hidden) stands in for the expert
+    GEMM's output write — it is compute-side work, not transport, and on
+    GB300 it dwarfs the a2a kernels (~2.4 ms vs ~0.1 ms at 512 tokens), so it
+    must stay outside the timed regions. DeepEP's dispatch buffers are stable
+    across calls, so the probe's tensors remain valid for every iteration;
+    the timed phases are then the pure dispatch and combine kernels, whose
+    fused receive-waits are genuine transport.
     """
-    state = {}
+    probe = dispatcher.dispatch(
+        hidden_states=hidden_states, topk_output=topk_output
+    )
+    combine_input = (
+        _expert_output_from_dispatch(probe),
+        probe.topk_ids,
+        probe.topk_weights,
+    )
 
     def dispatch_phase():
-        out = dispatcher.dispatch(
-            hidden_states=hidden_states, topk_output=topk_output
-        )
-        state["combine_input"] = (
-            _expert_output_from_dispatch(out),
-            out.topk_ids,
-            out.topk_weights,
-        )
+        dispatcher.dispatch(hidden_states=hidden_states, topk_output=topk_output)
 
     def combine_phase():
-        dispatcher.combine(combine_input=state["combine_input"])
+        dispatcher.combine(combine_input=combine_input)
 
     return dispatch_phase, combine_phase
 
