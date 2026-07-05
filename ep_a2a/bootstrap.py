@@ -45,13 +45,24 @@ def _maybe_patch_deepep_buffer():
         import deep_ep
     except ImportError:
         return
+    import inspect
+
     _orig = deep_ep.Buffer.__init__
+    accepted = set(inspect.signature(_orig).parameters)
 
     def _patched(self, *args, **kwargs):
-        if use_fabric:
-            kwargs["use_fabric"] = True
-        if disable_mnnvl:
-            kwargs["allow_mnnvl"] = False
+        # Older/vendored DeepEP builds lack these kwargs (e.g. the GB300
+        # sglang containers handle MNNVL natively); only inject what this
+        # Buffer accepts and say what was skipped.
+        for flag, key, val in (
+            (use_fabric, "use_fabric", True),
+            (disable_mnnvl, "allow_mnnvl", False),
+        ):
+            if flag:
+                if key in accepted:
+                    kwargs[key] = val
+                else:
+                    print(f"[bootstrap] deep_ep.Buffer has no '{key}'; skipping")
         return _orig(self, *args, **kwargs)
 
     deep_ep.Buffer.__init__ = _patched
