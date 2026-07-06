@@ -122,6 +122,15 @@ Two timing modes (the `timing` field records which one produced a result):
 - A backend whose library is not installed is reported as `N/A`.
 - `--dtype-mode native` requires fp8 dispatch to be active (JIT DeepGEMM); if it
   cannot be forced, that cell should be skipped rather than reported as bf16.
+- The dtype MODE is advisory across sglang versions; the result JSON records
+  the wire truth probed from an actual dispatch output:
+  `dispatch_wire_dtype` / `combine_wire_dtype` /
+  `dispatch_wire_bytes_per_token` (payload + amortized quant scales), and the
+  GB/s fields are computed from those actual bytes. Provenance fields
+  (`nodelist`, `deepep_max_dispatch_tokens_per_rank`) record where and with
+  what buffer geometry a result was produced — both matter (allocation-to-
+  allocation variance up to ~1.7x; buffer max-tokens is a ~25% lever on the
+  LL kernel floor).
 - The workload (including routing) is generated once and replayed for all
   iterations; there is no step-to-step routing variance like real serving.
 

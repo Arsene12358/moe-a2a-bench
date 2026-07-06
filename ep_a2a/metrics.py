@@ -18,6 +18,14 @@ def dispatch_bytes_per_token(hidden: int, topk: int, dtype_bytes: int) -> int:
     return hidden * topk * dtype_bytes
 
 
+def dispatch_wire_bytes_per_token(
+    hidden: int, topk: int, payload_bytes: int, scale_bytes_per_elem: float
+) -> float:
+    """Actual wire bytes per token during dispatch, from the probed dispatch
+    output format (payload element size + amortized quantization scales)."""
+    return hidden * topk * (payload_bytes + scale_bytes_per_elem)
+
+
 def achieved_gbps(num_tokens: int, bytes_per_token: int, seconds: float) -> float:
     """Achieved algorithmic bandwidth in GB/s (10^9 bytes)."""
     return (num_tokens * bytes_per_token) / seconds / 1e9

@@ -39,6 +39,16 @@ def test_dispatch_bytes_per_token_bf16():
     assert dispatch_bytes_per_token(hidden=7168, topk=8, dtype_bytes=2) == 7168 * 8 * 2
 
 
+def test_dispatch_wire_bytes_per_token():
+    from ep_a2a.metrics import dispatch_wire_bytes_per_token
+
+    # fp8 payload (1B) + fp32 scale per 128 elements (0.03125 B/elem)
+    got = dispatch_wire_bytes_per_token(6144, 8, 1, 4 / 128)
+    assert got == 6144 * 8 * (1 + 0.03125)
+    # bf16, no scales
+    assert dispatch_wire_bytes_per_token(7168, 8, 2, 0.0) == 7168 * 8 * 2
+
+
 def test_achieved_gbps():
     # 1000 tokens, 1024 bytes/token, 1 ms.
     gbps = achieved_gbps(num_tokens=1000, bytes_per_token=1024, seconds=1e-3)

@@ -36,6 +36,29 @@ def _expert_output_from_dispatch(dispatch_out):
     return hs.to(torch.bfloat16)
 
 
+def detect_dispatch_wire(dispatch_out):
+    """Report the ACTUAL dispatch wire format from a dispatch output.
+
+    The requested dtype mode is advisory (e.g. sglang v0.5.11 has no
+    deepep_dispatcher_output_dtype field, so 'bf16 mode' still dispatches
+    fp8+scales); the wire truth is whatever the dispatcher emitted. Returns
+    (dtype_str, payload_bytes_per_element, scale_bytes_per_element) where the
+    scale term amortizes the per-group quantization scales over payload
+    elements (e.g. fp32 per 128 fp8 elements -> 0.03125 B/elem). Scales are
+    only counted when the output carries them as a (payload, scales) tuple;
+    some builds return a bare fp8 tensor with scales in a separate field, in
+    which case reported bytes are payload-only (<=3% under)."""
+    hs = dispatch_out.hidden_states
+    if isinstance(hs, tuple):  # (quantized payload, scales)
+        payload, scales = hs[0], hs[1]
+        scale_per_elem = (
+            scales.numel() * scales.element_size() / max(payload.numel(), 1)
+        )
+        dtype = str(payload.dtype).replace("torch.", "")
+        return dtype, payload.element_size(), scale_per_elem
+    return str(hs.dtype).replace("torch.", ""), hs.element_size(), 0.0
+
+
 def run_once(dispatcher, hidden_states, topk_output):
     """One dispatch+combine cycle. Returns the combined output tensor.
 

@@ -3,16 +3,24 @@ run_all.py (or directly via torchrun)."""
 from __future__ import annotations
 
 import json
+import os
+import socket
 
 import torch.distributed as dist
 
-from ep_a2a.adapter import correctness_gate, make_phase_fns, run_once
+from ep_a2a.adapter import (
+    _expert_output_from_dispatch,
+    correctness_gate,
+    detect_dispatch_wire,
+    make_phase_fns,
+    run_once,
+)
 from ep_a2a.bootstrap import build_dispatcher, init_dist_env
 from ep_a2a.config import parse_args
 from ep_a2a.metrics import (
     achieved_gbps,
     critical_path_series,
-    dispatch_bytes_per_token,
+    dispatch_wire_bytes_per_token,
     gather_times_matrix,
     per_rank_p50s,
     percentiles,
@@ -77,6 +85,16 @@ def main():
         dist.destroy_process_group()
         return
 
+    # Probe the ACTUAL wire format once (the requested dtype mode is advisory
+    # across sglang versions); also feeds the honest bytes accounting below.
+    probe_out = dispatcher.dispatch(
+        hidden_states=hidden_states, topk_output=topk_output
+    )
+    wire_dtype, payload_bytes, scale_bytes = detect_dispatch_wire(probe_out)
+    combine_wire_dtype = str(
+        _expert_output_from_dispatch(probe_out).dtype
+    ).replace("torch.", "")
+
     dist.barrier()
     _time_one = time_fn_cuda_graph if cfg.cuda_graph else time_fn
     _time_split = time_phases_cuda_graph if cfg.cuda_graph else time_phases
@@ -118,13 +136,18 @@ def main():
     )
     rx_skew = skew_max_mean(rx_pairs)
 
-    dtype_bytes = 2 if cfg.dtype_mode == "bf16" else 1
-    bpt = dispatch_bytes_per_token(cfg.hidden, cfg.topk, dtype_bytes)
+    bpt = dispatch_wire_bytes_per_token(
+        cfg.hidden, cfg.topk, payload_bytes, scale_bytes
+    )
     crit_p50_s = crit["p50_us"] / 1e6
-    gbps = achieved_gbps(cfg.num_tokens, bpt, crit_p50_s)
+    gbps = achieved_gbps(cfg.num_tokens, int(bpt), crit_p50_s)
     # The lane that saturates first under skew: the hottest rank's receive.
     hot_rank_rx_gbps = (
-        int(rx_pairs.max()) * cfg.hidden * dtype_bytes / crit_p50_s / 1e9
+        int(rx_pairs.max())
+        * cfg.hidden
+        * (payload_bytes + scale_bytes)
+        / crit_p50_s
+        / 1e9
     )
 
     result = {
@@ -154,6 +177,14 @@ def main():
         "rx_skew_max_mean": rx_skew,
         "achieved_gbps": gbps,
         "hot_rank_rx_gbps": hot_rank_rx_gbps,
+        # wire truth + provenance
+        "dispatch_wire_dtype": wire_dtype,
+        "combine_wire_dtype": combine_wire_dtype,
+        "dispatch_wire_bytes_per_token": bpt,
+        "deepep_max_dispatch_tokens_per_rank": os.environ.get(
+            "SGLANG_DEEPEP_NUM_MAX_DISPATCH_TOKENS_PER_RANK"
+        ),
+        "nodelist": os.environ.get("SLURM_JOB_NODELIST") or socket.gethostname(),
     }
     if phase_times is not None:
         for name in ("dispatch", "combine"):
